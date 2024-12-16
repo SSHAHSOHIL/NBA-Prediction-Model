@@ -1,0 +1,17 @@
+# Ignore Python bytecode files
+__pycache__/
+*.pyc
+
+# Ignore environment files
+.env
+
+# Ignore datasets folder
+datasets/
+
+# Ignore VSCode settings
+.vscode/
+
+# Ignore Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+.DS_Store
