@@ -4,6 +4,7 @@ __pycache__/
 
 # Ignore environment files
 .env
+*.joblib
  
 # Ignore datasets folder
 datasets/
@@ -15,3 +16,6 @@ datasets/
 .ipynb_checkpoints/
 
 .DS_Store
+
+#Ignore csv files
+train_data.csv
