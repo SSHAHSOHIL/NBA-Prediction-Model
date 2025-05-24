@@ -68,15 +68,18 @@ def get_game_logs(season, type, game_date, home_team, away_team):
 def load_model_and_state():
     MODEL_DIR = os.path.join(os.path.dirname(__file__))
     MONEYLINE_PATH = os.path.join(MODEL_DIR, "moneyline_model.joblib")
+    TEAM_ELOS_PATH = os.path.join(MODEL_DIR, "team_elos.joblib")
+    LAST_MOM5 = os.path.join(MODEL_DIR, "last_mom5.joblib")
+    MODEL_SPREAD = os.path.join(MODEL_DIR, "spread_model.joblib")
 
     if not os.path.exists(MONEYLINE_PATH):
         st.error(f"⚠️ Model file not found at {MONEYLINE_PATH}")
         st.stop()
     
     model = load(MONEYLINE_PATH)
-    team_elos = load('team_elos.joblib')
-    last_mom5 = load('last_mom5.joblib')
-    model_spread = load('spread_model.joblib')
+    team_elos = load(TEAM_ELOS_PATH)
+    last_mom5 = load(LAST_MOM5)
+    model_spread = load(MODEL_SPREAD)
     return model, team_elos, last_mom5, model_spread
 
 @st.cache_data
