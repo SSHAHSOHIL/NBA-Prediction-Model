@@ -1,0 +1,13 @@
+# Core app
+streamlit>=1.18.0       # for st.cache_data and latest Streamlit features
+pandas>=1.4.0           # data handling
+numpy>=1.22.0           # numerical operations
+
+# Machine learning & model persistence
+scikit-learn>=1.1.0     # pipeline, train_test_split, metrics, etc.
+xgboost>=1.7.0          # XGBRegressor
+joblib>=1.2.0           # load/save .joblib models
+
+# NBA data API
+nba_api>=1.1.10         # stats.nba.com wrapper
+requests>=2.28.0        # HTTP requests (nba_api dependency)

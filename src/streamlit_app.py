@@ -41,27 +41,27 @@ def get_game_logs(season, type, game_date, home_team, away_team):
     return df_combined
 
 
-def check_team_playoffs(team): 
-    df_team = (
-        LeagueDashTeamStats (
-            season= '2024-25',
-            season_type_all_star='Playoffs'
-        )
-        .get_data_frames()[0]
-    )
+# def check_team_playoffs(team): 
+#     df_team = (
+#         LeagueDashTeamStats (
+#             season= '2024-25',
+#             season_type_all_star='Playoffs'
+#         )
+#         .get_data_frames()[0]
+#     )
 
-    teams_list = nba_teams.get_teams()
-    for i in teams_list:
-        if i['abbreviation'] == team:
-            full_name = i['full_name']
-            break
+#     teams_list = nba_teams.get_teams()
+#     for i in teams_list:
+#         if i['abbreviation'] == team:
+#             full_name = i['full_name']
+#             break
 
 
-    for _, r in df_team.iterrows():
-        if r['TEAM_NAME'] == full_name:
-            return True
+#     for _, r in df_team.iterrows():
+#         if r['TEAM_NAME'] == full_name:
+#             return True
     
-    return False
+#     return False
 
 # Load trained model and saved state
 def load_model_and_state():
@@ -181,9 +181,9 @@ def main():
             return
         
         if not played:
-            if not check_team_playoffs(home_abbr) or not check_team_playoffs(away_abbr):
-                 st.error("Invalid teams. Teams must be in the playoffs. Try again.")
-                 return
+            # if not check_team_playoffs(home_abbr) or not check_team_playoffs(away_abbr):
+            #      st.error("Invalid teams. Teams must be in the playoffs. Try again.")
+            #      return
         
             df_games = fetch_upcoming_games(home_abbr, away_abbr)
             df_up = build_upcoming_df(df_games, id_to_abbr)
@@ -205,7 +205,7 @@ def main():
                 df_up[f'{stat}_diff'] = df_up[stat] - df_up[f'{stat}_opp']
 
             # Select features for prediction
-            feature_cols = [f'{s}_diff' for s in ['W_PCT','PTS_RANK','AST_RANK','REB_RANK']] + ['is_home','elo_diff','momentum_5']
+            feature_cols = [f'{s}_diff' for s in ['W_PCT']] + ['elo_diff','momentum_5']
             X_up = df_up[feature_cols]
 
             # Generate probabilities
@@ -223,7 +223,8 @@ def main():
             # spread selection
             st.subheader("Predict Game Edge")
             user_spread = st.number_input("Enter Current Spread (home team): ", step=0.5, format="%.1f")
-            X_sel = df_up[feature_cols]
+            feature_cols_2 = [f'{s}_diff' for s in ['W_PCT']] + ['elo_diff','is_home']
+            X_sel = df_up[feature_cols_2]
             pred_spread = model_spread.predict(X_sel)[0]
 
             if user_spread:
