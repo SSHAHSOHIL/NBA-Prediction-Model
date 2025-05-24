@@ -4,6 +4,7 @@ from joblib import load
 from nba_api.stats.endpoints import ScoreboardV2, LeagueDashTeamStats
 from nba_api.stats.static import teams as nba_teams
 from nba_api.stats.endpoints import LeagueGameLog
+import os
 
 
 
@@ -65,7 +66,14 @@ def get_game_logs(season, type, game_date, home_team, away_team):
 
 # Load trained model and saved state
 def load_model_and_state():
-    model = load('moneyline_model.joblib')
+    MODEL_DIR = os.path.join(os.path.dirname(__file__))
+    MONEYLINE_PATH = os.path.join(MODEL_DIR, "moneyline_model.joblib")
+
+    if not os.path.exists(MONEYLINE_PATH):
+        st.error(f"⚠️ Model file not found at {MONEYLINE_PATH}")
+        st.stop()
+    
+    model = load(MONEYLINE_PATH)
     team_elos = load('team_elos.joblib')
     last_mom5 = load('last_mom5.joblib')
     model_spread = load('spread_model.joblib')
