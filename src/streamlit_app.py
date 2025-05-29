@@ -1,10 +1,25 @@
 import streamlit as st
 import pandas as pd
 from joblib import load
-from nba_api.stats.endpoints import ScoreboardV2, LeagueDashTeamStats
+from joblib import dump
+from nba_api.stats.endpoints import PlayerGameLogs, LeagueDashTeamStats
 from nba_api.stats.static import teams as nba_teams
 from nba_api.stats.endpoints import LeagueGameLog
 import os
+
+from train_models import (
+        retrain_moneyline_model,
+        retrain_spread_model,
+        retrain_player_props_model,
+        load_team_elos,
+        load_last_mom5
+    )
+
+MONEYLINE_PATH = os.path.join(os.path.dirname(__file__), 'moneyline_model.joblib')
+MODEL_SPREAD   = os.path.join(os.path.dirname(__file__), 'spread_model.joblib')
+PLAYER_PROPS   = os.path.join(os.path.dirname(__file__), 'player_props_model.joblib')
+TEAM_ELOS_PATH = os.path.join(os.path.dirname(__file__), 'team_elos.joblib')
+LAST_MOM5_PATH = os.path.join(os.path.dirname(__file__), 'last_mom5.joblib')
 
 
 
@@ -42,28 +57,6 @@ def get_game_logs(season, type, game_date, home_team, away_team):
     return df_combined
 
 
-# def check_team_playoffs(team): 
-#     df_team = (
-#         LeagueDashTeamStats (
-#             season= '2024-25',
-#             season_type_all_star='Playoffs'
-#         )
-#         .get_data_frames()[0]
-#     )
-
-#     teams_list = nba_teams.get_teams()
-#     for i in teams_list:
-#         if i['abbreviation'] == team:
-#             full_name = i['full_name']
-#             break
-
-
-#     for _, r in df_team.iterrows():
-#         if r['TEAM_NAME'] == full_name:
-#             return True
-    
-#     return False
-
 # Load trained model and saved state
 def load_model_and_state():
     MODEL_DIR = os.path.join(os.path.dirname(__file__))
@@ -71,16 +64,16 @@ def load_model_and_state():
     TEAM_ELOS_PATH = os.path.join(MODEL_DIR, "team_elos.joblib")
     LAST_MOM5 = os.path.join(MODEL_DIR, "last_mom5.joblib")
     MODEL_SPREAD = os.path.join(MODEL_DIR, "spread_model.joblib")
+    PLAYER_PROPS = os.path.join(MODEL_DIR, "player_props_model.joblib")
 
-    if not os.path.exists(MONEYLINE_PATH):
-        st.error(f"⚠️ Model file not found at {MONEYLINE_PATH}")
-        st.stop()
     
     model = load(MONEYLINE_PATH)
     team_elos = load(TEAM_ELOS_PATH)
     last_mom5 = load(LAST_MOM5)
     model_spread = load(MODEL_SPREAD)
-    return model, team_elos, last_mom5, model_spread
+    player_props = load(PLAYER_PROPS)
+
+    return model, team_elos, last_mom5, model_spread, player_props
 
 @st.cache_data
 # Cache prior season stats to avoid repeated API calls
@@ -151,7 +144,33 @@ def build_upcoming_df(df_games, id_to_abbr):
 # Main Streamlit app
 def main():
 
-    model, team_elos, last_mom5, model_spread = load_model_and_state()
+    with st.sidebar.expander("⚙️ Retrain Models", expanded=False):
+        # Moneyline
+        if st.button("Retrain Moneyline"):
+            with st.spinner("Updating moneyline model…"):
+                model = retrain_moneyline_model()
+                dump(model, MONEYLINE_PATH)
+            st.success("✅ Moneyline model refreshed!")
+            st.rerun()
+
+        # Spread
+        if st.button("Retrain Spread"):
+            with st.spinner("Updating spread model…"):
+                spread = retrain_spread_model()
+                dump(spread, MODEL_SPREAD)
+            st.success("✅ Spread model refreshed!")
+            st.rerun()
+
+        # Player Props
+        if st.button("Retrain Player Props"):
+            with st.spinner("Updating player props…"):
+                props = retrain_player_props_model()
+                dump(props, PLAYER_PROPS)
+            st.success("✅ Player props model refreshed!")
+            st.rerun()
+
+
+    model, team_elos, last_mom5, model_spread, player_props_model = load_model_and_state()
 
     season_feats = load_prior_season_stats()
 
@@ -245,7 +264,93 @@ def main():
                     st.success(f"✅ Take the **Home Team** spread! Model thinks they should be favored by {pred_spread:+.1f}, not {user_spread:+.1f}.")
                 elif pred_spread > user_spread:
                     st.error(f"❌ Take the **Away Team** spread! Model thinks home team should only be favored by {pred_spread:+.1f}, not {user_spread:+.1f}.")
+            
+            st.subheader("Player Props Predictor")
+            player_id = st.text_input("Enter PLAYER_ID:") 
+            line = st.number_input("Over/Under line (pts): ", step=0.5)
+            if player_id and line:
+                pid = int(player_id)
+                print(pid)
+                logs = PlayerGameLogs(
+                    player_id_nullable=pid,
+                    season_nullable="2024-25",
+                    season_type_nullable="Playoffs"
+                ).get_data_frames()[0]
+                if logs.empty:
+                    st.error("No logs found for that PLAYER_ID.")
+                    return
+                logs["GAME_DATE"] = pd.to_datetime(logs['GAME_DATE'])
+                logs = logs.sort_values(["PLAYER_ID", "GAME_DATE"])
+                player_id_grouping = logs.groupby("PLAYER_ID")
+                logs["PTS_PREV_GAME"] = player_id_grouping["PTS"].shift(1)
+                logs["PTS_ROLL5"] = player_id_grouping["PTS"].shift(1).rolling(5).mean().fillna(method = "ffill")
+                logs["MIN_ROLL5"]  = player_id_grouping["MIN"].shift(1).rolling(5).mean().fillna(method="ffill")
 
+                team_name_to_id = {}
+                for t in nba_teams.get_teams():
+                    team_name_to_id[t['abbreviation']] = t['id']
+                new_col = []
+                for l in logs['MATCHUP']:
+                    team, vs, opp = l.split()
+                    new_col.append(team_name_to_id[opp])
+
+                logs['OPP_ID'] = new_col
+
+                rs = LeagueGameLog(season="2024-25", season_type_all_star="Regular Season")\
+                        .get_data_frames()[0]
+                po = LeagueGameLog(season="2024-25", season_type_all_star="Playoffs")\
+                        .get_data_frames()[0]
+                team_logs = pd.concat([rs, po], ignore_index=True)
+                team_logs["GAME_DATE"] = pd.to_datetime(team_logs["GAME_DATE"])
+
+                for_logs = team_logs.rename(columns={"TEAM_ID":"TEAM_ID","PTS":"PTS_SCORED"})
+                opp_logs = team_logs.rename(columns={"TEAM_ID":"OPP_ID","PTS":"PTS_ALLOWED"})[
+                    ["GAME_ID","OPP_ID","PTS_ALLOWED","GAME_DATE"]
+                ]
+
+                team_logs = (
+                    for_logs
+                    .merge(opp_logs, on=["GAME_ID","GAME_DATE"])
+                    .query("TEAM_ID != OPP_ID")
+                    .sort_values(["TEAM_ID","GAME_DATE"])
+                )
+
+                grp = team_logs.groupby("TEAM_ID")
+
+                team_logs["DEF_LAG1"]   = grp["PTS_ALLOWED"].shift(1)
+
+                # 5‐game rolling mean of allowed points
+                team_logs["DEF_ROLL5"]  = grp["PTS_ALLOWED"].shift(1)\
+                                                    .rolling(5, min_periods=1)\
+                                                    .mean()
+                def_feats = team_logs[[
+                    "TEAM_ID","GAME_ID","DEF_LAG1","DEF_ROLL5"
+                ]].rename(columns={"TEAM_ID":"OPP_ID"})
+
+                logs = logs.merge(def_feats,
+                                on=["GAME_ID","OPP_ID"],
+                                how="left")
+                
+                last = logs.iloc[-1]
+                
+
+
+                feat = pd.DataFrame([{
+                    'PTS_PREV_GAME': last['PTS_PREV_GAME'],
+                    'PTS_ROLL5': last['PTS_ROLL5'],
+                    'MIN_ROLL5': last['MIN_ROLL5'],
+                    'DEF_LAG1': last['DEF_LAG1'],
+                    'DEF_ROLL5': last['DEF_ROLL5']
+                }])
+
+
+                pred = player_props_model.predict(feat)[0]
+                st.write(logs[["GAME_DATE","MATCHUP","OPP_ID","DEF_LAG1","DEF_ROLL5", "PTS"]].tail())
+                st.write(f"**Predicted PTS:** {pred:.1f}")
+                if pred >= line:
+                    st.success("✅ Suggest you take the OVER")
+                else:
+                    st.error("❌ Suggest you take the UNDER")
         else:
             season_split = season[: 4]
             season_split_2 = "20" + season[5 :]
