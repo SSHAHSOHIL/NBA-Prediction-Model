@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from joblib import load
 from joblib import dump
-from nba_api.stats.endpoints import PlayerGameLogs, LeagueDashTeamStats
+from nba_api.stats.endpoints import PlayerGameLogs, LeagueDashTeamStats, CommonTeamRoster
 from nba_api.stats.static import teams as nba_teams
 from nba_api.stats.endpoints import LeagueGameLog
 import os
@@ -265,92 +265,128 @@ def main():
                 elif pred_spread > user_spread:
                     st.error(f"❌ Take the **Away Team** spread! Model thinks home team should only be favored by {pred_spread:+.1f}, not {user_spread:+.1f}.")
             
+            
+
+
+            # ─── 2) Fetch each roster via CommonTeamRoster ─────────────────────────────────
+            # You can cache this if you like, e.g. @st.cache_data on a function.
+            season_str = "2024-25"  # or make this dynamic if you want
+
+            home_id = abbr_to_id[home_abbr]
+            away_id = abbr_to_id[away_abbr]
+
+            home_roster_df = CommonTeamRoster(team_id=home_id, season=season_str).get_data_frames()[0]
+            away_roster_df = CommonTeamRoster(team_id=away_id, season=season_str).get_data_frames()[0]
+
+
+
+            # ─── 4) Show a dropdown of all those names ────────────────────────────────────
             st.subheader("Player Props Predictor")
-            player_id = st.text_input("Enter PLAYER_ID:") 
-            line = st.number_input("Over/Under line (pts): ", step=0.5)
-            if player_id and line:
-                pid = int(player_id)
-                print(pid)
+            side = st.selectbox("Choose roster to pick a player from:", ["Home", "Away"])
+
+            if side == "Home":
+                roster_df = home_roster_df
+            else:
+                roster_df = away_roster_df
+            
+            # Build a name→ID mapping for the selected side
+            player_dict = dict(zip(roster_df["PLAYER"], roster_df["PLAYER_ID"]))
+            player_names = sorted(player_dict.keys())
+
+            # ─── 2) Let user pick a player from that roster ───────────────────────────────
+            selected_player = st.selectbox("Select Player:", player_names)
+            pid = player_dict[selected_player]
+            
+            # ─── 5) Let user enter an Over/Under line as before ───────────────────────────
+            line = st.number_input("Over/Under line (pts):", step=0.5)
+
+            # ─── 6) Only run prediction once we have pid & line ───────────────────────────
+            if pid is not None and line:
+                # (You can print(pid) for debugging if you want)
                 logs = PlayerGameLogs(
                     player_id_nullable=pid,
                     season_nullable="2024-25",
                     season_type_nullable="Playoffs"
                 ).get_data_frames()[0]
+
                 if logs.empty:
-                    st.error("No logs found for that PLAYER_ID.")
-                    return
-                logs["GAME_DATE"] = pd.to_datetime(logs['GAME_DATE'])
-                logs = logs.sort_values(["PLAYER_ID", "GAME_DATE"])
-                player_id_grouping = logs.groupby("PLAYER_ID")
-                logs["PTS_PREV_GAME"] = player_id_grouping["PTS"].shift(1)
-                logs["PTS_ROLL5"] = player_id_grouping["PTS"].shift(1).rolling(5).mean().fillna(method = "ffill")
-                logs["MIN_ROLL5"]  = player_id_grouping["MIN"].shift(1).rolling(5).mean().fillna(method="ffill")
-
-                team_name_to_id = {}
-                for t in nba_teams.get_teams():
-                    team_name_to_id[t['abbreviation']] = t['id']
-                new_col = []
-                for l in logs['MATCHUP']:
-                    team, vs, opp = l.split()
-                    new_col.append(team_name_to_id[opp])
-
-                logs['OPP_ID'] = new_col
-
-                rs = LeagueGameLog(season="2024-25", season_type_all_star="Regular Season")\
-                        .get_data_frames()[0]
-                po = LeagueGameLog(season="2024-25", season_type_all_star="Playoffs")\
-                        .get_data_frames()[0]
-                team_logs = pd.concat([rs, po], ignore_index=True)
-                team_logs["GAME_DATE"] = pd.to_datetime(team_logs["GAME_DATE"])
-
-                for_logs = team_logs.rename(columns={"TEAM_ID":"TEAM_ID","PTS":"PTS_SCORED"})
-                opp_logs = team_logs.rename(columns={"TEAM_ID":"OPP_ID","PTS":"PTS_ALLOWED"})[
-                    ["GAME_ID","OPP_ID","PTS_ALLOWED","GAME_DATE"]
-                ]
-
-                team_logs = (
-                    for_logs
-                    .merge(opp_logs, on=["GAME_ID","GAME_DATE"])
-                    .query("TEAM_ID != OPP_ID")
-                    .sort_values(["TEAM_ID","GAME_DATE"])
-                )
-
-                grp = team_logs.groupby("TEAM_ID")
-
-                team_logs["DEF_LAG1"]   = grp["PTS_ALLOWED"].shift(1)
-
-                # 5‐game rolling mean of allowed points
-                team_logs["DEF_ROLL5"]  = grp["PTS_ALLOWED"].shift(1)\
-                                                    .rolling(5, min_periods=1)\
-                                                    .mean()
-                def_feats = team_logs[[
-                    "TEAM_ID","GAME_ID","DEF_LAG1","DEF_ROLL5"
-                ]].rename(columns={"TEAM_ID":"OPP_ID"})
-
-                logs = logs.merge(def_feats,
-                                on=["GAME_ID","OPP_ID"],
-                                how="left")
-                
-                last = logs.iloc[-1]
-                
-
-
-                feat = pd.DataFrame([{
-                    'PTS_PREV_GAME': last['PTS_PREV_GAME'],
-                    'PTS_ROLL5': last['PTS_ROLL5'],
-                    'MIN_ROLL5': last['MIN_ROLL5'],
-                    'DEF_LAG1': last['DEF_LAG1'],
-                    'DEF_ROLL5': last['DEF_ROLL5']
-                }])
-
-
-                pred = player_props_model.predict(feat)[0]
-                st.write(logs[["GAME_DATE","MATCHUP","OPP_ID","DEF_LAG1","DEF_ROLL5", "PTS"]].tail())
-                st.write(f"**Predicted PTS:** {pred:.1f}")
-                if pred >= line:
-                    st.success("✅ Suggest you take the OVER")
+                    st.error(f"No logs found for PLAYER_ID ({selected_player}). He did not play in the playoffs sorry!")
                 else:
-                    st.error("❌ Suggest you take the UNDER")
+                    # ── Compute feature columns exactly as before ───────────────────────────
+                    logs["GAME_DATE"] = pd.to_datetime(logs["GAME_DATE"])
+                    logs = logs.sort_values(["PLAYER_ID", "GAME_DATE"])
+                    grp = logs.groupby("PLAYER_ID")
+                    logs["PTS_PREV_GAME"] = grp["PTS"].shift(1)
+                    logs["PTS_ROLL5"]     = grp["PTS"].shift(1).rolling(5).mean().fillna(method="ffill")
+                    logs["MIN_ROLL5"]     = grp["MIN"].shift(1).rolling(5).mean().fillna(method="ffill")
+
+                    # ── Get opponent ID from the “MATCHUP” column ──────────────────────────
+                    team_name_to_id = {t["abbreviation"]: t["id"] for t in nba_teams.get_teams()}
+                    opp_ids = []
+                    for m in logs["MATCHUP"]:
+                        # MATCHUP is like “LAL vs BOS” or “BOS @ LAL”
+                        # We want the opponent’s abbreviation
+                        parts = m.split()
+                        if len(parts) == 3:
+                            # parts = [team, “vs”/“@”, opp]
+                            opp_abbr = parts[2]
+                        else:
+                            opp_abbr = None
+                        opp_ids.append(team_name_to_id.get(opp_abbr, None))
+                    logs["OPP_ID"] = opp_ids
+
+                    # ── Build team‐level logs to compute DEF_LAG1 & DEF_ROLL5 ────────────
+                    rs = LeagueGameLog(season="2024-25", season_type_all_star="Regular Season").get_data_frames()[0]
+                    po = LeagueGameLog(season="2024-25", season_type_all_star="Playoffs").get_data_frames()[0]
+                    team_logs = pd.concat([rs, po], ignore_index=True)
+                    team_logs["GAME_DATE"] = pd.to_datetime(team_logs["GAME_DATE"])
+
+                    # rename & merge so each row has TEAM_ID, PTS_SCORED, OPP_ID, PTS_ALLOWED
+                    for_logs = team_logs.rename(columns={"TEAM_ID": "TEAM_ID", "PTS": "PTS_SCORED"})
+                    opp_logs = (
+                        team_logs.rename(columns={"TEAM_ID": "OPP_ID", "PTS": "PTS_ALLOWED"})[
+                            ["GAME_ID", "OPP_ID", "PTS_ALLOWED", "GAME_DATE"]
+                        ]
+                    )
+                    team_logs = (
+                        for_logs
+                        .merge(opp_logs, on=["GAME_ID", "GAME_DATE"])
+                        .query("TEAM_ID != OPP_ID")
+                        .sort_values(["TEAM_ID", "GAME_DATE"])
+                    )
+                    grp_team = team_logs.groupby("TEAM_ID")
+                    team_logs["DEF_LAG1"] = grp_team["PTS_ALLOWED"].shift(1)
+                    team_logs["DEF_ROLL5"] = grp_team["PTS_ALLOWED"].shift(1).rolling(5, min_periods=1).mean()
+
+                    def_feats = (
+                        team_logs[["TEAM_ID", "GAME_ID", "DEF_LAG1", "DEF_ROLL5"]]
+                        .rename(columns={"TEAM_ID": "OPP_ID"})
+                    )
+
+                    logs = logs.merge(def_feats, on=["GAME_ID", "OPP_ID"], how="left")
+
+                    # ── Take the last row (most recent game) as feature input ───────────────
+                    last = logs.iloc[-1]
+                    feat = pd.DataFrame([{
+                        "PTS_PREV_GAME": last["PTS_PREV_GAME"],
+                        "PTS_ROLL5":      last["PTS_ROLL5"],
+                        "MIN_ROLL5":      last["MIN_ROLL5"],
+                        "DEF_LAG1":       last["DEF_LAG1"],
+                        "DEF_ROLL5":      last["DEF_ROLL5"]
+                    }])
+
+                    # ── Predict with your pre‐trained model ────────────────────────────────
+                    pred = player_props_model.predict(feat)[0]
+
+                    # ── Show a few recent log lines & the prediction ───────────────────────
+                    st.write(logs[["GAME_DATE", "MATCHUP", "OPP_ID", "DEF_LAG1", "DEF_ROLL5", "PTS"]].tail())
+                    st.write(f"**Selected Player:** {selected_player} (PLAYER_ID {pid})")
+                    st.write(f"**Predicted PTS:** {pred:.1f}")
+
+                    if pred >= line:
+                        st.success("✅ Suggest you take the OVER")
+                    else:
+                        st.error("❌ Suggest you take the UNDER")
         else:
             season_split = season[: 4]
             season_split_2 = "20" + season[5 :]
