@@ -365,6 +365,18 @@ def main():
 
                     logs = logs.merge(def_feats, on=["GAME_ID", "OPP_ID"], how="left")
 
+                    last_season_df = (
+                        LeagueDashTeamStats (
+                            season= '2023-24',
+                            season_type_all_star='Regular Season',
+                        )
+                        .get_data_frames()[0]
+                    )
+
+                    stats = last_season_df.set_index("TEAM_ID")
+                    for col in ["W_PCT","PLUS_MINUS","DREB","STL","BLK"]:
+                        logs[f"opp_{col.lower()}"] = logs["OPP_ID"].map(stats[col])
+
                     # ── Take the last row (most recent game) as feature input ───────────────
                     last = logs.iloc[-1]
                     feat = pd.DataFrame([{
@@ -372,7 +384,12 @@ def main():
                         "PTS_ROLL5":      last["PTS_ROLL5"],
                         "MIN_ROLL5":      last["MIN_ROLL5"],
                         "DEF_LAG1":       last["DEF_LAG1"],
-                        "DEF_ROLL5":      last["DEF_ROLL5"]
+                        "DEF_ROLL5":      last["DEF_ROLL5"],
+                        "opp_w_pct": last["opp_w_pct"],
+                        "opp_plus_minus": last["opp_plus_minus"],
+                        "opp_dreb": last["opp_dreb"],
+                        "opp_stl": last["opp_stl"],
+                        "opp_blk": last["opp_blk"]
                     }])
 
                     # ── Predict with your pre‐trained model ────────────────────────────────
